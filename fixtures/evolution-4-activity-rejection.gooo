@@ -1,0 +1,19 @@
+gooo semantic_graph v1
+
+scenario=evolution-4-activity-rejection
+source_digest=sha256:source-evolution-trial-4-activity
+toolchain_digest=sha256:go1.27
+payload="explanatory phase graph evidence retained for deterministic reduction; removeable note A; removeable note B"
+
+node id=activity-1 kind=activity label="fetch inputs" payload="activity payload one"
+node id=activity-2 kind=activity label="normalize source" payload="activity payload two"
+node id=activity-3 kind=activity label="verify semantics" payload="activity payload three"
+node id=activity-4 kind=activity label="publish result" payload="activity payload four"
+node id=note-1 kind=annotation label="unrelated note one" payload="annotation payload one"
+node id=note-2 kind=annotation label="unrelated note two" payload="annotation payload two"
+node id=note-3 kind=annotation label="unrelated note three" payload="annotation payload three"
+
+edge id=edge-1 from=activity-1 to=activity-2 kind=depends_on payload="dependency one"
+edge id=edge-2 from=activity-2 to=activity-3 kind=depends_on payload="dependency two"
+edge id=edge-3 from=activity-3 to=activity-4 kind=depends_on payload="dependency three"
+edge id=edge-4 from=note-1 to=note-2 kind=annotation payload="unrelated annotation"

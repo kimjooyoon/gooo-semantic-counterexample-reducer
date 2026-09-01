@@ -1,31 +1,40 @@
-# Gooo repository bootstrap
+# Gooo semantic counterexample reducer
 
-This repository defines a machine-readable bootstrap contract for new Gooo repositories.
-The `.gooo` metacode owns the policy meaning; Go consumes it as an executor and verifier.
+This repository contains an executable reducer for failed Gooo semantic graphs. It turns
+the declared graph into an explainable, smaller counterexample while preserving the
+original oracle decision and exact reason digest.
 
-The root commit is the single permitted `BOOTSTRAP_EXCEPTION`. After it, changes must
-arrive through pull requests. The CI workflow verifies the contract and uploads evidence
-for every run.
+The reducer is driven by [`meta/counterexample-reducer.gooo`](meta/counterexample-reducer.gooo).
+That metacode owns the denominator, oracle predicates, reduction operation order,
+generation plan, status precedence, and the two pinned representative scenarios:
 
-The contract deliberately excludes this root `README.md` from inventory measurements.
+- the evolution-trial four-activity rejection;
+- name capture followed by privilege escalation.
 
-## Operating boundary
+Go is limited to parsing the metacode, executing its declared runner, and emitting JSON
+artifacts. Fixtures are consumed only after their declared immutable digest matches.
+Generated output is written to a caller-owned directory outside the input repository.
 
-The reusable contract separates planning from applying repository mutations. A plan is
-caller-owned output and must be generated before an explicit apply operation. Before apply,
-the target repository must have zero writes. Unknown GitHub API or ruleset observability is
-preserved as `UNKNOWN` with all six required fields; it is never treated as closed.
+## Status model
 
-The contract also makes improvement claims conservative: a same-input-digest integer
-before/after pair is required, otherwise the claim is `UNKNOWN`. Global language
-self-improvement and external utility likewise remain `UNKNOWN` without evidence.
+`CLOSED` means the final graph preserves the baseline decision and reason digest.
+`UNKNOWN` means the oracle or input identity was not stable; it always includes `stage`,
+`step`, `reason`, `unknown_class`, `next_operation`, and `blocked_by`. `REFUTED` means
+the final candidate changed the decision or reason. Precedence is `REFUTED > UNKNOWN > CLOSED`.
 
-The executor exposes four stages: `plan` writes a deterministic manifest/dossier to a
-caller-owned path, `verify` evaluates observed policy evidence, `conformance` checks the
-canonical cases and repeatability, and `evidence` combines the exact inventory, runtime,
-test, and artifact measurements. None of these stages writes the target repository.
+An improvement claim is `UNKNOWN` unless a prior report matches the same scenario,
+source digest, contract digest, and toolchain digest. Exact node, edge, byte, and oracle
+invocation integers are emitted for every scenario.
 
-## Status precedence
+## CI-only verification
 
-`REFUTED` outranks `UNKNOWN`, which outranks `CLOSED`. A single observed post-bootstrap
-direct-main commit therefore refutes the policy even when other evidence is unavailable.
+The repository was bootstrapped from `gooo-repository-bootstrap v0.1.1`. The bootstrap
+commit is the only direct-main exception; subsequent changes are delivered through a PR.
+GitHub Actions is the verification authority. It runs Go 1.27, records exact inventory,
+runtime, memory, test, and generated-artifact metrics, checks that the input repository
+is unchanged, and uploads the complete reduction evidence. Local test, conformance, or
+execution results are not used as a success claim.
+
+The release workflow is manually dispatched only for the exact merged main SHA after CI
+passes. It creates one annotated tag and an immutable GitHub release containing the
+source archive, reports, metrics, manifest, and SHA256 sums.

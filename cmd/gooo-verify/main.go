@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/kimjooyoon/gooo-repository-bootstrap/internal/gooo"
+	"github.com/kimjooyoon/gooo-semantic-counterexample-reducer/internal/gooo"
 )
 
 func main() {
@@ -138,10 +138,10 @@ func runConformance(args []string) {
 		fail(errors.New("same input digest did not produce identical manifest and dossier"))
 	}
 	report := struct {
-		Schema     string `json:"schema"`
-		Status     string `json:"status"`
+		Schema     string   `json:"schema"`
+		Status     string   `json:"status"`
 		Precedence []string `json:"precedence"`
-		Cases      int    `json:"canonical_cases"`
+		Cases      int      `json:"canonical_cases"`
 	}{
 		Schema:     "gooo.conformance/v1",
 		Status:     "PASS",

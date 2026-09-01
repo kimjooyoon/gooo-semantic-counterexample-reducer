@@ -1,0 +1,15 @@
+gooo semantic_graph v1
+
+scenario=name-capture-privilege-escalation
+source_digest=sha256:source-name-capture-privilege-escalation
+toolchain_digest=sha256:go1.27
+payload="security review explanation; removable context one; removable context two"
+
+node id=identity kind=principal label="request identity" payload="identity payload"
+node id=captured-name kind=binding label="captured resource name" payload="captured name payload"
+node id=admin-role kind=permission label="elevated role" payload="permission payload"
+node id=unrelated-note kind=annotation label="unrelated security note" payload="note payload"
+
+edge id=edge-name from=identity to=captured-name kind=name_capture payload="name capture witness"
+edge id=edge-privilege from=captured-name to=admin-role kind=privilege_escalation payload="privilege escalation witness"
+edge id=edge-note from=unrelated-note to=captured-name kind=annotation payload="unrelated note edge"
