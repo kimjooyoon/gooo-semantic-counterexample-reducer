@@ -1,0 +1,129 @@
+name: semantic-counterexample-reducer
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  verify-reducer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+          cache: true
+      - name: Check formatting
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+      - name: Compile packages
+        id: compile
+        run: |
+          set -Eeuo pipefail
+          started=$(date +%s%3N)
+          /usr/bin/time -f '%M' -o "$RUNNER_TEMP/compile.rss" sh -c 'go test -run "^$" ./... >/dev/null'
+          finished=$(date +%s%3N)
+          echo "wall_ms=$((finished - started))" >> "$GITHUB_OUTPUT"
+      - name: Vet and build runner
+        id: build
+        run: |
+          set -Eeuo pipefail
+          go vet ./...
+          started=$(date +%s%3N)
+          /usr/bin/time -f '%M' -o "$RUNNER_TEMP/build.rss" go build -trimpath -o "$RUNNER_TEMP/gooo-counterexample-reducer" ./cmd/gooo-counterexample-reducer
+          finished=$(date +%s%3N)
+          echo "wall_ms=$((finished - started))" >> "$GITHUB_OUTPUT"
+      - name: Run Go tests with exact counters
+        id: tests
+        run: |
+          set -Eeuo pipefail
+          started=$(date +%s%3N)
+          /usr/bin/time -f '%M' -o "$RUNNER_TEMP/test.rss" go test -json -count=1 ./... > "$RUNNER_TEMP/go-test.json"
+          finished=$(date +%s%3N)
+          echo "wall_ms=$((finished - started))" >> "$GITHUB_OUTPUT"
+      - name: Verify metacode runner manifest
+        id: conformance
+        run: |
+          set -Eeuo pipefail
+          started=$(date +%s%3N)
+          mkdir -p "$RUNNER_TEMP/reducer-conformance"
+          /usr/bin/time -f '%M' -o "$RUNNER_TEMP/conformance.rss" "$RUNNER_TEMP/gooo-counterexample-reducer" manifest --contract meta/counterexample-reducer.gooo --repo-root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/reducer-conformance/runner-manifest.json"
+          jq -e '.authority == "metacode" and .precedence == ["REFUTED","UNKNOWN","CLOSED"] and (.operations | length) == 3 and (.predicates | length) == 5 and (.scenario_ids | length) == 2' "$RUNNER_TEMP/reducer-conformance/runner-manifest.json" >/dev/null
+          finished=$(date +%s%3N)
+          echo "wall_ms=$((finished - started))" >> "$GITHUB_OUTPUT"
+      - name: Reduce pinned representative fixtures
+        id: integration
+        run: |
+          set -Eeuo pipefail
+          started=$(date +%s%3N)
+          /usr/bin/time -f '%M' -o "$RUNNER_TEMP/integration.rss" bash scripts/run-reducer.sh "$GITHUB_WORKSPACE" "$RUNNER_TEMP/gooo-counterexample-reducer" "$RUNNER_TEMP/reducer-output"
+          finished=$(date +%s%3N)
+          echo "wall_ms=$((finished - started))" >> "$GITHUB_OUTPUT"
+      - name: Check exact reduction results
+        run: |
+          set -Eeuo pipefail
+          jq -e '.status == "CLOSED" and .scenarios == 2 and .closed == 2 and .unknown == 0 and .refuted == 0 and .improvement_unknown == 2' "$RUNNER_TEMP/reducer-output/reduction-report.json" >/dev/null
+          for scenario in evolution-4-activity-rejection name-capture-privilege-escalation; do
+            jq -e '.status == "CLOSED" and .baseline.decision == "REFUTED" and .final.decision == "REFUTED" and .baseline.reason_digest == .final.reason_digest and .before.nodes >= .after.nodes and .before.edges >= .after.edges and .before.bytes > .after.bytes and .oracle_invocations >= 2 and .improvement.status == "UNKNOWN" and (.unknown == null or (.unknown.stage and .unknown.step and .unknown.reason and .unknown.unknown_class and .unknown.next_operation and .unknown.blocked_by))' "$RUNNER_TEMP/reducer-output/reduction-reports/$scenario.json" >/dev/null
+          done
+      - name: Collect exact inventory and metrics
+        if: always()
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/reducer-output"
+          tracked=$(git ls-files | grep -v '^README.md$' || true)
+          regular_files=$(printf '%s\n' "$tracked" | awk 'NF {count++} END {print count + 0}')
+          go_files=$(printf '%s\n' "$tracked" | awk '$0 ~ /\.go$/ {count++} END {print count + 0}')
+          gooo_files=$(printf '%s\n' "$tracked" | awk '$0 ~ /\.gooo$/ {count++} END {print count + 0}')
+          go_lines=0
+          gooo_lines=0
+          while IFS= read -r file; do
+            test -z "$file" && continue
+            lines=$(awk 'END {print NR + 0}' "$file")
+            case "$file" in
+              *.go) go_lines=$((go_lines + lines)) ;;
+              *.gooo) gooo_lines=$((gooo_lines + lines)) ;;
+            esac
+          done <<< "$tracked"
+          subdirectories=$(find . -mindepth 1 -type d -not -path './.git' -not -path './.git/*' | wc -l | tr -d ' ')
+          generated_files=$(find "$work" -type f | wc -l | tr -d ' ')
+          generated_bytes=$(find "$work" -type f -print0 | xargs -0 stat -c '%s' | awk '{total += $1} END {print total + 0}')
+          test_total=$(jq -s '[.[] | select(.Action == "run" and (.Test // "") != "")] | length' "$RUNNER_TEMP/go-test.json")
+          test_selected="$test_total"
+          test_executed=$(jq -s '[.[] | select((.Action == "pass" or .Action == "fail") and (.Test // "") != "")] | length' "$RUNNER_TEMP/go-test.json")
+          test_reused=$(jq -s '[.[] | select(.Action == "output" and ((.Output // "") | contains("(cached)")))] | length' "$RUNNER_TEMP/go-test.json")
+          test_failed=$(jq -s '[.[] | select(.Action == "fail" and (.Test // "") != "")] | length' "$RUNNER_TEMP/go-test.json")
+          test_unknown=$(jq -s '[.[] | select(.Action == "skip" and (.Test // "") != "")] | length' "$RUNNER_TEMP/go-test.json")
+          build_rss=$(cat "$RUNNER_TEMP/build.rss")
+          test_rss=$(cat "$RUNNER_TEMP/test.rss")
+          conformance_rss=$(cat "$RUNNER_TEMP/conformance.rss")
+          integration_rss=$(cat "$RUNNER_TEMP/integration.rss")
+          peak_rss=$((build_rss > test_rss ? build_rss : test_rss))
+          peak_rss=$((peak_rss > conformance_rss ? peak_rss : conformance_rss))
+          peak_rss=$((peak_rss > integration_rss ? peak_rss : integration_rss))
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" --arg commit "$GITHUB_SHA" --arg go_version "$(go version)" \
+            --argjson go_files "$go_files" --argjson gooo_files "$gooo_files" --argjson go_physical_lines "$go_lines" --argjson gooo_physical_lines "$gooo_lines" \
+            --argjson physical_lines "$((go_lines + gooo_lines))" --argjson regular_files "$regular_files" --argjson subdirectories "$subdirectories" \
+            --argjson generated_files "$generated_files" --argjson generated_bytes "$generated_bytes" \
+            --argjson compile_wall_ms "${{ steps.compile.outputs.wall_ms }}" --argjson build_wall_ms "${{ steps.build.outputs.wall_ms }}" --argjson test_wall_ms "${{ steps.tests.outputs.wall_ms }}" \
+            --argjson conformance_wall_ms "${{ steps.conformance.outputs.wall_ms }}" --argjson integration_wall_ms "${{ steps.integration.outputs.wall_ms }}" \
+            --argjson build_peak_rss_kib "$build_rss" --argjson test_peak_rss_kib "$test_rss" --argjson conformance_peak_rss_kib "$conformance_rss" --argjson integration_peak_rss_kib "$integration_rss" --argjson peak_rss_kib "$peak_rss" \
+            --argjson total "$test_total" --argjson selected "$test_selected" --argjson executed "$test_executed" --argjson reused "$test_reused" --argjson failed "$test_failed" --argjson unknown "$test_unknown" \
+            '{schema:"gooo.semantic-counterexample-reducer/ci-metrics/v1",repository:$repository,commit:$commit,go_version:$go_version,go_files:$go_files,gooo_files:$gooo_files,go_physical_lines:$go_physical_lines,gooo_physical_lines:$gooo_physical_lines,physical_lines:$physical_lines,regular_files:$regular_files,subdirectories:$subdirectories,root_readme_excluded:true,generated_artifacts:{count:$generated_files,bytes:$generated_bytes},runtime:{compile_wall_ms:$compile_wall_ms,build_wall_ms:$build_wall_ms,test_wall_ms:$test_wall_ms,conformance_wall_ms:$conformance_wall_ms,integration_wall_ms:$integration_wall_ms,build_peak_rss_kib:$build_peak_rss_kib,test_peak_rss_kib:$test_peak_rss_kib,conformance_peak_rss_kib:$conformance_peak_rss_kib,integration_peak_rss_kib:$integration_peak_rss_kib,peak_rss_kib:$peak_rss_kib},tests:{total:$total,selected:$selected,executed:$executed,reused:$reused,failed:$failed,unknown:$unknown},repository_writes:0,input_repository_unchanged:true}' > "$work/ci-metrics.json"
+      - name: Upload reduction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gooo-semantic-counterexample-reducer-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/reducer-output/*
+            ${{ runner.temp }}/reducer-conformance/*
+            ${{ runner.temp }}/go-test.json
+          if-no-files-found: warn

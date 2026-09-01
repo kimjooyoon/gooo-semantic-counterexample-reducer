@@ -1,0 +1,24 @@
+gooo semantic_counterexample_reducer v1
+
+authority metacode
+denominator id=semantic-counterexample-reducer-v1 scenarios=2 unit=semantic_graph
+decision statuses=CLOSED,UNKNOWN,REFUTED
+precedence REFUTED>UNKNOWN>CLOSED
+unknown_fields stage,step,reason,unknown_class,next_operation,blocked_by
+source_policy mode=immutable_digest_or_self_pinned_fixture
+toolchain go=1.27 digest=sha256:go1.27
+oracle_replays count=2
+
+predicate ordinal=1 id=decision kind=decision preserve=true
+predicate ordinal=2 id=reason-digest kind=reason_digest preserve=true
+predicate ordinal=3 id=source-digest kind=source_digest preserve=true
+predicate ordinal=4 id=contract-digest kind=contract_digest preserve=true
+predicate ordinal=5 id=toolchain-digest kind=toolchain_digest preserve=true
+
+operation ordinal=1 id=remove-nodes kind=remove_nodes target=nodes granularity=2
+operation ordinal=2 id=remove-edges kind=remove_edges target=edges granularity=2
+operation ordinal=3 id=trim-payload kind=trim_bytes target=payload granularity=2
+generation_plan order=remove-nodes,remove-edges,trim-payload output=runner-manifest.json,reduction-report.json,reduced-graphs
+
+scenario ordinal=1 id=evolution-4-activity-rejection fixture=fixtures/evolution-4-activity-rejection.gooo fixture_digest=sha256:bc14c8c9ffe030b1c979d9b90a4d12864cb1e60a14e8f5d3f3f99de95576dced source_digest=sha256:source-evolution-trial-4-activity toolchain_digest=sha256:go1.27 oracle_kind=activity_count_at_least oracle_target=activity oracle_threshold=4 expected_decision=REFUTED reason="phase graph must declare exactly three executable activities"
+scenario ordinal=2 id=name-capture-privilege-escalation fixture=fixtures/name-capture-privilege-escalation.gooo fixture_digest=sha256:fa3acc8bd8b823ab5c3d557920237c2999da6a383cb0ecc9dd63f0fbeb40dce3 source_digest=sha256:source-name-capture-privilege-escalation toolchain_digest=sha256:go1.27 oracle_kind=edge_kinds_present oracle_kinds=name_capture,privilege_escalation expected_decision=REFUTED reason="captured name enabled privilege escalation"

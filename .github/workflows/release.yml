@@ -1,0 +1,116 @@
+name: publish immutable semantic counterexample release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact merged main commit to release
+        required: true
+        type: string
+      release_version:
+        description: New unused 0.x.y version
+        required: true
+        default: '0.1.0'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+      - name: Bind exact merged commit and refuse reuse
+        run: |
+          set -Eeuo pipefail
+          case "$RELEASE_VERSION" in 0.*.*) ;; *) exit 64 ;; esac
+          RELEASE_TAG="v$RELEASE_VERSION"
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse --abbrev-ref HEAD)" = main
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then exit 1; fi
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >/dev/null 2>&1; then exit 1; fi
+      - name: Verify source and build release runner
+        run: |
+          set -Eeuo pipefail
+          test -z "$(gofmt -l $(git ls-files '*.go'))"
+          go vet ./...
+          go test ./...
+          go build -trimpath -o "$RUNNER_TEMP/gooo-counterexample-reducer" ./cmd/gooo-counterexample-reducer
+      - name: Generate release evidence
+        run: |
+          set -Eeuo pipefail
+          "$RUNNER_TEMP/gooo-counterexample-reducer" reduce --contract meta/counterexample-reducer.gooo --repo-root "$GITHUB_WORKSPACE" --out "$RUNNER_TEMP/reducer-output"
+          jq -e '.status == "CLOSED" and .unknown == 0 and .refuted == 0' "$RUNNER_TEMP/reducer-output/reduction-report.json" >/dev/null
+      - name: Assemble immutable release assets
+        run: |
+          set -Eeuo pipefail
+          release="$RUNNER_TEMP/release"
+          mkdir -p "$release"
+          source="gooo-semantic-counterexample-reducer-source-$RELEASE_TAG.tar.gz"
+          report="reduction-report-$RELEASE_TAG.json"
+          metrics="ci-metrics-$RELEASE_TAG.json"
+          version="version.json"
+          manifest="release-manifest-$RELEASE_TAG.json"
+          git archive --format=tar.gz --prefix="gooo-semantic-counterexample-reducer-$RELEASE_TAG/" "$EXPECTED_SHA" > "$release/$source"
+          cp "$RUNNER_TEMP/reducer-output/reduction-report.json" "$release/$report"
+          if test -f "$RUNNER_TEMP/reducer-output/ci-metrics.json"; then cp "$RUNNER_TEMP/reducer-output/ci-metrics.json" "$release/$metrics"; else jq -n --arg commit "$EXPECTED_SHA" '{schema:"gooo.semantic-counterexample-reducer/ci-metrics/v1",commit:$commit,source:"release-runner",repository_writes:0}' > "$release/$metrics"; fi
+          jq -n --arg version "$RELEASE_VERSION" --arg tag "$RELEASE_TAG" --arg commit "$EXPECTED_SHA" '{schema:"gooo/semantic-counterexample-reducer/release/v1",version:$version,tag:$tag,commit:$commit,scope:"EXPLAINABLE_MINIMAL_FAILED_SEMANTIC_GRAPHS",immutable_release_required:true}' > "$release/$version"
+          source_digest="sha256:$(sha256sum "$release/$source" | awk '{print $1}')"
+          report_digest="sha256:$(sha256sum "$release/$report" | awk '{print $1}')"
+          metrics_digest="sha256:$(sha256sum "$release/$metrics" | awk '{print $1}')"
+          version_digest="sha256:$(sha256sum "$release/$version" | awk '{print $1}')"
+          jq -n --arg schema "gooo/semantic-counterexample-reducer/release-manifest/v1" --arg version "$RELEASE_VERSION" --arg tag "$RELEASE_TAG" --arg commit "$EXPECTED_SHA" --arg source "$source" --arg source_digest "$source_digest" --arg report "$report" --arg report_digest "$report_digest" --arg metrics "$metrics" --arg metrics_digest "$metrics_digest" --arg version_digest "$version_digest" '{schema:$schema,version:$version,tag:$tag,commit:$commit,assets:[{name:$source,digest:$source_digest},{name:$report,digest:$report_digest},{name:$metrics,digest:$metrics_digest},{name:"version.json",digest:$version_digest}]}' > "$release/$manifest"
+          (cd "$release" && sha256sum "$source" "$report" "$metrics" version.json "$manifest" > SHA256SUMS)
+          (cd "$release" && sha256sum -c SHA256SUMS)
+      - name: Create annotated tag and immutable release
+        run: |
+          set -Eeuo pipefail
+          release="$RUNNER_TEMP/release"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$RELEASE_TAG" "$EXPECTED_SHA" -m "gooo-semantic-counterexample-reducer $RELEASE_TAG"
+          git push origin "refs/tags/$RELEASE_TAG"
+          gh release create "$RELEASE_TAG" --verify-tag --title "gooo-semantic-counterexample-reducer $RELEASE_TAG" --notes 'Immutable evidence-bounded semantic counterexample reducer release.' "$release"/*
+      - name: Audit exact release coordinates and asset digests
+        run: |
+          set -Eeuo pipefail
+          release="$RUNNER_TEMP/release"
+          data=$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")
+          jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .immutable == true and .draft == false and .prerelease == false' <<< "$data" >/dev/null
+          tag_ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")
+          test "$(jq -r '.object.type' <<< "$tag_ref")" = tag
+          tag_object=$(jq -r '.object.sha' <<< "$tag_ref")
+          tag_body=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$tag_object")
+          target=$(jq -r '.object.sha' <<< "$tag_body")
+          test "$(jq -r '.object.type' <<< "$tag_body")" = commit
+          test "$target" = "$EXPECTED_SHA"
+          for file in "$release"/*; do
+            name=$(basename "$file")
+            size=$(stat -c '%s' "$file")
+            digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            jq -e --arg name "$name" --arg digest "$digest" --argjson size "$size" '[.assets[] | select(.name == $name and .size == $size and .digest == $digest)] | length == 1' <<< "$data" >/dev/null
+          done
+          jq -n --arg repository "$GITHUB_REPOSITORY" --arg tag "$RELEASE_TAG" --arg target "$target" --arg tag_object "$tag_object" --argjson release_id "$(jq '.id' <<< "$data")" --argjson run_id "$GITHUB_RUN_ID" --argjson assets "$(jq '[.assets[] | {id,name,size,digest}]' <<< "$data")" '{schema:"gooo/semantic-counterexample-reducer/release-audit/v1",repository:$repository,tag:$tag,release_id:$release_id,tag_object:$tag_object,target_commit:$target,run_id:$run_id,assets:$assets,immutable:true}' > "$RUNNER_TEMP/release-audit.json"
+          cat "$RUNNER_TEMP/release-audit.json" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload release audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gooo-semantic-counterexample-reducer-${{ inputs.release_version }}-release-audit
+          path: |
+            ${{ runner.temp }}/release-audit.json
+            ${{ runner.temp }}/release/*
+          if-no-files-found: error
